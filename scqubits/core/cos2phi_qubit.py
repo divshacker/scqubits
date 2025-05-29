@@ -42,10 +42,48 @@ from scqubits.core.storage import WaveFunctionOnGrid
 
 # - Cosine-2-phi qubit noise class ------------------------------------------
 class NoisyCos2PhiQubit(NoisySystem, ABC):
+    """Abstract base class for noisy Cosine Two Phi qubits.
+
+    This class extends `NoisySystem` and serves as an abstract base class (ABC)
+    to define a common interface and provide shared noise calculation
+    functionalities tailored for "Cosine Two Phi" type qubits.
+
+    Concrete subclasses, such as `Cos2PhiQubit`, are expected to implement the
+    abstract methods defined herein. These abstract methods typically return
+    operators crucial for describing the qubit's interaction with noise,
+    including:
+        - `phi_1_operator`: Phase operator related to the first mode (φ₁).
+        - `phi_2_operator`: Phase operator related to the second mode (φ₂).
+        - `n_1_operator`: Charge operator related to the first mode (n₁).
+        - `n_2_operator`: Charge operator related to the second mode (n₂).
+        - `n_zeta_operator`: Charge operator for the ζ mode.
+
+    In addition to defining the interface for these operators, this class
+    provides concrete implementations for common noise channels relevant to
+    Cosine Two Phi qubits. These include methods like `t1_inductive` (for
+    inductive losses), `t1_capacitive` (for dielectric losses in junctions),
+    and `t1_purcell` (for Purcell effect due to capacitive coupling). These
+    concrete noise calculation methods rely on the specific implementations
+    of the abstract operators provided by the subclasses.
+    """
     @abstractmethod
     def phi_1_operator(
         self, energy_esys: Union[bool, Tuple[ndarray, ndarray]] = False
     ) -> Union[ndarray, csc_matrix]:
+        """Abstract method for the phase operator φ₁ of the Cosine Two Phi qubit.
+
+        Subclasses must implement this method to return the operator
+        representing the phase mode φ₁ (phi_1).
+
+        Args:
+            energy_esys: If `False` (default), returns the operator in the
+                native basis. If `True` or a tuple `(evals, evecs)`,
+                returns the operator in the energy eigenbasis.
+
+        Returns:
+            The phase operator φ₁ as a `csc_matrix` (native basis) or
+            `ndarray` (eigenbasis).
+        """
         pass
 
     @abstractmethod
@@ -1651,27 +1689,31 @@ class Cos2PhiQubit(base.QubitBaseClass, serializers.Serializable, NoisyCos2PhiQu
     def phi_1_operator(
         self, energy_esys: Union[bool, Tuple[ndarray, ndarray]] = False
     ) -> Union[ndarray, csc_matrix]:
-        r"""Returns operator representing the phase across inductor 1 in harmonic
-        oscillator or eigenenergy basis.
+        r"""Returns the operator for the phase mode φ₁ of the Cosine Two Phi qubit.
 
-        Parameters
-        ----------
-        energy_esys:
-            If `False` (default), returns operator in the harmonic oscillator basis.
-            If `True`, the energy eigenspectrum is computed, returns operator in the
-            energy eigenbasis.
-            If `energy_esys = esys`, where esys is a tuple containing two ndarrays (eigenvalues
-            and energy eigenvectors), returns operator in the energy eigenbasis, and does not
-            have to recalculate eigenspectrum.
+        The phase mode φ₁ is one of the transformed phase coordinates of the
+        qubit, defined as φ₁ = ζ - φ. Here, ζ and φ are the individual phase
+        coordinates associated with the qubit's constituent loops/modes before
+        transformation to the coupled basis.
 
-        Returns
-        -------
-            Operator in chosen basis. If harmonic oscillator basis chosen, operator
-            returned as a csc_matrix. If the eigenenergy basis is chosen,
-            unless `energy_esys` is specified, operator has dimensions of :attr:`truncated_dim`
-            x truncated_dim, and is returned as an ndarray. Otherwise, if eigenenergy
-            basis is chosen, operator has dimensions of m x m, for m given eigenvectors,
-            and is returned as an ndarray.
+        The operator is constructed as `self.zeta_operator() - self.phi_operator()`.
+
+        Args:
+            energy_esys: Determines the basis of the returned operator.
+                - If `False` (default): Operator is returned in the native
+                  harmonic oscillator basis (tensor product of individual mode
+                  bases for φ, ζ, and θ).
+                - If `True`: Operator is calculated and returned in the energy
+                  eigenbasis of the full Cos2PhiQubit Hamiltonian. This may
+                  trigger diagonalization if the eigensystem hasn't been
+                  computed yet.
+                - If a tuple `(evals, evecs)`: Operator is transformed into
+                  this provided energy eigenbasis.
+
+        Returns:
+            The phase operator φ₁:
+            - As a `csc_matrix` if returned in the native basis.
+            - As an `ndarray` if returned in the energy eigenbasis.
         """
         native = self.zeta_operator() - self.phi_operator()
         return self.process_op(native_op=native, energy_esys=energy_esys)
@@ -1767,27 +1809,35 @@ class Cos2PhiQubit(base.QubitBaseClass, serializers.Serializable, NoisyCos2PhiQu
     def d_hamiltonian_d_flux(
         self, energy_esys: Union[bool, Tuple[ndarray, ndarray]] = False
     ) -> Union[ndarray, csc_matrix]:
-        r"""Returns operator representing a derivative of the Hamiltonian with respect to
-        flux in the native or eigenenergy basis.
+        r"""Returns the derivative of the Hamiltonian with respect to flux.
 
-        Parameters
-        ----------
-        energy_esys:
-            If `False` (default), returns operator in the harmonic oscillator basis.
-            If `True`, the energy eigenspectrum is computed, returns operator in the
-            energy eigenbasis.
-            If `energy_esys = esys`, where esys is a tuple containing two ndarrays (eigenvalues
-            and energy eigenvectors), returns operator in the energy eigenbasis, and does not
-            have to recalculate eigenspectrum.
+        This operator, ∂H/∂Φext (where Φext is `self.flux`), quantifies how
+        the qubit's Hamiltonian changes with variations in the external
+        magnetic flux. It is essential for analyzing the qubit's sensitivity
+        to flux noise and for designing flux modulation protocols.
 
-        Returns
-        -------
-            Operator in chosen basis. If harmonic oscillator basis chosen, operator
-            returned as a csc_matrix. If the eigenenergy basis is chosen,
-            unless `energy_esys` is specified, operator has dimensions of :attr:`truncated_dim`
-            x truncated_dim, and is returned as an ndarray. Otherwise, if eigenenergy
-            basis is chosen, operator has dimensions of m x m, for m given eigenvectors,
-            and is returned as an ndarray.
+        The calculation involves differentiating terms in the Hamiltonian
+        dependent on `self.flux`. These primarily arise from the Josephson
+        energy terms:
+        - The main Josephson term: -2EJ cos(θ)cos(φ + πΦext/Φ₀)
+        - The disorder Josephson term (if dEJ ≠ 0):
+          2 dEJ EJ sin(θ)sin(φ + πΦext/Φ₀)
+        The derivative results in terms proportional to sin(φ + πΦext/Φ₀) and
+        cos(φ + πΦext/Φ₀), scaled by EJ, dEJ, and π.
+
+        Args:
+            energy_esys: Determines the basis of the returned operator.
+                - If `False` (default): Operator is in the native basis (tensor
+                  product of individual harmonic oscillator and charge bases).
+                - If `True`: Operator is in the energy eigenbasis. This may
+                  trigger diagonalization if the eigensystem is not yet computed.
+                - If a tuple `(evals, evecs)`: Operator is transformed into this
+                  provided eigenbasis.
+
+        Returns:
+            The flux derivative operator ∂H/∂Φext:
+            - As a `csc_matrix` if in the native basis.
+            - As an `ndarray` if in the energy eigenbasis.
         """
         phi_flux_term = self._sin_phi_operator() * np.cos(
             self.flux * np.pi
@@ -1819,27 +1869,33 @@ class Cos2PhiQubit(base.QubitBaseClass, serializers.Serializable, NoisyCos2PhiQu
     def d_hamiltonian_d_EJ(
         self, energy_esys: Union[bool, Tuple[ndarray, ndarray]] = False
     ) -> Union[ndarray, csc_matrix]:
-        r"""Returns operator representing a derivative of the Hamiltonian with respect to
-        EJ in the native or eigenenergy basis.
+        r"""Returns the derivative of the Hamiltonian with respect to EJ.
 
-        Parameters
-        ----------
-        energy_esys:
-            If `False` (default), returns operator in the harmonic oscillator basis.
-            If `True`, the energy eigenspectrum is computed, returns operator in the
-            energy eigenbasis.
-            If `energy_esys = esys`, where esys is a tuple containing two ndarrays (eigenvalues
-            and energy eigenvectors), returns operator in the energy eigenbasis, and does not
-            have to recalculate eigenspectrum.
+        This operator, ∂H/∂EJ (where EJ is `self.EJ`), quantifies how the
+        qubit's Hamiltonian changes with variations in the Josephson energy
+        of the junctions. It is crucial for analyzing the qubit's sensitivity
+        to EJ fluctuations, often referred to as critical current noise.
 
-        Returns
-        -------
-            Operator in chosen basis. If harmonic oscillator basis chosen, operator
-            returned as a csc_matrix. If the eigenenergy basis is chosen,
-            unless `energy_esys` is specified, operator has dimensions of :attr:`truncated_dim`
-            x truncated_dim, and is returned as an ndarray. Otherwise, if eigenenergy
-            basis is chosen, operator has dimensions of m x m, for m given eigenvectors,
-            and is returned as an ndarray.
+        The calculation involves differentiating terms in the Hamiltonian
+        that are proportional to `self.EJ`. In the Cos2PhiQubit, these are:
+        - The main Josephson term: -2 * EJ * cos(θ)cos(φ_eff)
+        - The disorder Josephson term: 2 * dEJ * EJ * sin(θ)sin(φ_eff)
+        where φ_eff = φ + π * flux / Φ₀. The derivative yields operators
+        proportional to cos(θ)cos(φ_eff) and dEJ * sin(θ)sin(φ_eff).
+
+        Args:
+            energy_esys: Determines the basis of the returned operator.
+                - If `False` (default): Operator is in the native basis (tensor
+                  product of individual harmonic oscillator and charge bases).
+                - If `True`: Operator is in the energy eigenbasis. This may
+                  trigger diagonalization if the eigensystem is not yet computed.
+                - If a tuple `(evals, evecs)`: Operator is transformed into this
+                  provided eigenbasis.
+
+        Returns:
+            The EJ derivative operator ∂H/∂EJ:
+            - As a `csc_matrix` if in the native basis.
+            - As an `ndarray` if in the energy eigenbasis.
         """
         phi_flux_term = self._cos_phi_operator() * np.cos(
             self.flux * np.pi
@@ -1864,27 +1920,35 @@ class Cos2PhiQubit(base.QubitBaseClass, serializers.Serializable, NoisyCos2PhiQu
     def d_hamiltonian_d_ng(
         self, energy_esys: Union[bool, Tuple[ndarray, ndarray]] = False
     ) -> Union[ndarray, csc_matrix]:
-        r"""Returns operator representing a derivative of the Hamiltonian with respect to
-        ng in the native or eigenenergy basis.
+        r"""Returns the derivative of the Hamiltonian with respect to offset charge ng.
 
-        Parameters
-        ----------
-        energy_esys:
-            If `False` (default), returns operator in the harmonic oscillator basis.
-            If `True`, the energy eigenspectrum is computed, returns operator in the
-            energy eigenbasis.
-            If `energy_esys = esys`, where esys is a tuple containing two ndarrays (eigenvalues
-            and energy eigenvectors), returns operator in the energy eigenbasis, and does not
-            have to recalculate eigenspectrum.
+        This operator, ∂H/∂ng (where ng is `self.ng`), is essential for
+        evaluating the qubit's sensitivity to charge noise. It quantifies how
+        the Hamiltonian, and thus the energy levels, change with fluctuations
+        in the offset charge ng.
 
-        Returns
-        -------
-            Operator in chosen basis. If harmonic oscillator basis chosen, operator
-            returned as a csc_matrix. If the eigenenergy basis is chosen,
-            unless `energy_esys` is specified, operator has dimensions of :attr:`truncated_dim`
-            x truncated_dim, and is returned as an ndarray. Otherwise, if eigenenergy
-            basis is chosen, operator has dimensions of m x m, for m given eigenvectors,
-            and is returned as an ndarray.
+        The derivative is calculated from terms in the Hamiltonian that depend
+        on `self.ng`. For the Cos2PhiQubit, these are:
+        - The cross-kinetic term: `2 * ECJ_prime * (n_theta - ng - n_zeta)**2`
+          (where `ECJ_prime = self._disordered_ecj()`).
+          Its derivative w.r.t. ng is `-4 * ECJ_prime * (n_theta - ng - n_zeta)`.
+        - The disorder term related to dCJ:
+          `-4 * dCJ * ECJ_prime * n_phi * (n_theta - ng - n_zeta)`.
+          Its derivative w.r.t. ng is `4 * dCJ * ECJ_prime * n_phi`.
+
+        Args:
+            energy_esys: Determines the basis of the returned operator.
+                - If `False` (default): Operator is in the native basis (tensor
+                  product of individual harmonic oscillator and charge bases).
+                - If `True`: Operator is in the energy eigenbasis. This may
+                  trigger diagonalization if the eigensystem is not yet computed.
+                - If a tuple `(evals, evecs)`: Operator is transformed into this
+                  provided eigenbasis.
+
+        Returns:
+            The offset charge derivative operator ∂H/∂ng:
+            - As a `csc_matrix` if in the native basis.
+            - As an `ndarray` if in the energy eigenbasis.
         """
         native = (
             4 * self.dCJ * self._disordered_ecj() * self.n_phi_operator()
